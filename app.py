@@ -2,26 +2,32 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
-import requests
 
-# Configuración de la interfaz
+# Configuración de la interfaz de la app
 st.set_page_config(page_title="Bitácora Agrícola Fitosanitaria", page_icon="🧅", layout="wide")
 
 st.title("🚜 Cuaderno de Bitácora y Control Fitosanitario")
 st.write("Registra tus cultivos, monitorea plagas y lleva el control permanente en la nube.")
 
-# Conexión directa para lectura limpia
+# Gestión de la conexión con la base de datos mediante Streamlit GSheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Lectura segura de los datos actuales
+# 1. Lectura de los datos existentes en Google Sheets
 try:
+    # Lee la hoja de cálculo configurada en los Secrets
     df_bitacora = conn.read()
     if df_bitacora is not None:
         df_bitacora = df_bitacora.dropna(how="all")
-except Exception:
-    df_bitacora = pd.DataFrame()
+except Exception as e:
+    # Si la hoja está totalmente vacía o hay un error inicial, estructuramos las columnas vacías
+    df_bitacora = pd.DataFrame(columns=[
+        "Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", 
+        "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", 
+        "Control Nutricional (Etapa)", "Fertilizantes (Foliares/Granulados)", 
+        "Estado del Cultivo", "Responsable"
+    ])
 
-# Formulario en la barra lateral
+# 2. Formulario de entrada en la barra lateral
 st.sidebar.header("📝 Añadir Nuevo Registro")
 with st.sidebar.form("formulario_campo"):
     fecha = st.date_input("Fecha de Registro/Inspección", datetime.date.today())
@@ -34,69 +40,43 @@ with st.sidebar.form("formulario_campo"):
     estado = st.selectbox("Estado Actual del Cultivo", ["Siembra", "Emergencia", "En Desarrollo", "Cosecha", "Post-cosecha"])
     responsable = st.text_input("Responsable de la Aplicación / Inspección")
     
-    boton_guardar = st.form_submit_button("Guardar Permanentemente")
+    boton_guardar = st.form_submit_button("Guardar Permanentemente en Google Sheets")
 
-# --- SOLUCIÓN AL BLOQUEO DE ESCRITURA ---
+# 3. Procesamiento y guardado permanente de los datos
 if boton_guardar:
     if cultivo and plagas:
-        # 1. Obtener el ID de la hoja desde los Secrets
-        try:
-            url_hoja = st.secrets["connections"]["gsheets"]["spreadsheet"]
-            # Extraemos el ID base para construir el formulario de envío directo
-            sheet_id = url_hoja.split("/d/")[1].split("/")[0]
-            
-            # 2. Enviar los datos simulando una inserción directa por URL para saltar la restricción
-            # Estructuramos la fila de datos limpia
-            nuevo_registro = pd.DataFrame([{
-                "Fecha Registro": str(fecha),
-                "Nombre de Cultivo": cultivo,
-                "Lote / Parcela": lote if lote else "No asignado",
-                "Plagas Comunes / Observadas": plagas,
-                "Control Fitosanitario (Dosis)": fitosanitario,
-                "Control Nutricional (Etapa)": nutricional if 'nutricional' in locals() else nutricional,
-                "Fertilizantes (Foliares/Granulados)": fertilizantes,
-                "Estado del Cultivo": estado,
-                "Responsable": responsable if responsable else "General"
-            }])
-            
-            # Ejecutamos la unión local y forzamos la actualización segura por API de consulta
-            df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True) if not df_bitacora.empty else nuevo_registro
-            
-            # Intentar el método alternativo directo sin reescribir metadatos estructurados
-            conn.update(data=df_actualizado)
-            st.success(f"¡Registro para '{cultivo}' guardado con éxito!")
-            st.rerun()
-            
-        except Exception as e:
-            # Si el conector sigue bloqueado por Google, usamos la persistencia de respaldo en caché local
-            if 'temp_data' not in st.session_state:
-                st.session_state.temp_data = []
-            
-            st.session_state.temp_data.append({
-                "Fecha Registro": str(fecha), "Nombre de Cultivo": cultivo, "Lote / Parcela": lote,
-                "Plagas Comunes / Observadas": plagas, "Control Fitosanitario (Dosis)": fitosanitario,
-                "Control Nutricional (Etapa)": nutricional if 'nutricional' in locals() else nutricional, 
-                "Fertilizantes (Foliares/Granulados)": fertilizantes, "Estado del Cultivo": estado, "Responsable": responsable
-            })
-            st.success(f"¡Registro para '{cultivo}' guardado localmente en la app de forma exitosa!")
-            st.rerun()
+        # Formateamos los datos del formulario exactamente como una nueva fila
+        nuevo_registro = pd.DataFrame([{
+            "Fecha Registro": str(fecha),
+            "Nombre de Cultivo": cultivo,
+            "Lote / Parcela": lote if lote else "No asignado",
+            "Plagas Comunes / Observadas": plagas,
+            "Control Fitosanitario (Dosis)": fitosanitario,
+            "Control Nutricional (Etapa)": nutritional if 'nutritional' in locals() else nutricional,
+            "Fertilizantes (Foliares/Granulados)": fertilizantes,
+            "Estado del Cultivo": estado,
+            "Responsable": responsable if responsable else "General"
+        }])
+        
+        # Combinamos los datos anteriores de Google Sheets con la nueva fila
+        if df_bitacora.empty:
+            df_actualizado = nuevo_registro
+        else:
+            df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True)
+        
+        # Actualizamos la hoja de Google Sheets de forma definitiva
+        conn.update(data=df_actualizado)
+        st.sidebar.success(f"¡Registro para '{cultivo}' guardado con éxito!")
+        
+        # Forzar recarga automática de la app para mostrar los nuevos cambios en la tabla
+        st.rerun()
     else:
-        st.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
+        st.sidebar.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
 
-# Mostrar los datos integrados en pantalla
+# 4. Mostrar la tabla actualizada en el centro de la pantalla
 st.header("📊 Cuaderno de Campo Digitalizado (Nube)")
 
-# Combinar datos de Google con los guardados en esta sesión si existieran
-if 'temp_data' in st.session_state and len(st.session_state.temp_data) > 0:
-    df_temp = pd.DataFrame(st.session_state.temp_data)
-    if not df_bitacora.empty:
-        df_pantalla = pd.concat([df_bitacora, df_temp], ignore_index=True)
-    else:
-        df_pantalla = df_temp
+if df_bitacora is not None and not df_bitacora.empty:
+    st.dataframe(df_bitacora, use_container_width=True)
 else:
-    df_pantalla = df_bitacora
-
-if df_pantalla is not None and not df_pantalla.empty:
-    st.dataframe(df_pantalla, use_container_width=True)
-else:
-    st.info("La base de datos está lista para recibir el primer registro desde la barra lateral.")
+    st.info("La base de datos está vacía en Google Sheets o lista para recibir el primer registro.")
