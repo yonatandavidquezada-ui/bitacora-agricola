@@ -9,16 +9,23 @@ st.set_page_config(page_title="Bitácora Agrícola Fitosanitaria", page_icon="�
 st.title("🚜 Cuaderno de Bitácora y Control Fitosanitario")
 st.write("Registra tus cultivos, monitorea plagas y lleva el control permanente en la nube.")
 
-# Conexión segura
+# Conexión directa y simple
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Lectura limpia
+# Lectura de datos existentes
 try:
     df_bitacora = conn.read()
+    # Si la hoja tiene filas completamente vacías o nulas, las limpiamos
+    df_bitacora = df_bitacora.dropna(how="all")
 except Exception:
-    df_bitacora = pd.DataFrame()
+    df_bitacora = pd.DataFrame(columns=[
+        "Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", 
+        "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", 
+        "Control Nutricional (Etapa)", "Fertilizantes (Foliares/Granulados)", 
+        "Estado del Cultivo", "Responsable"
+    ])
 
-# Formulario
+# Formulario lateral
 st.sidebar.header("📝 Añadir Nuevo Registro")
 with st.sidebar.form("formulario_campo"):
     fecha = st.date_input("Fecha de Registro/Inspección", datetime.date.today())
@@ -35,33 +42,35 @@ with st.sidebar.form("formulario_campo"):
 
 if boton_guardar:
     if cultivo and plagas:
+        # Formateamos los datos del formulario de manera exacta
         nuevo_registro = pd.DataFrame([{
             "Fecha Registro": str(fecha),
             "Nombre de Cultivo": cultivo,
             "Lote / Parcela": lote if lote else "No asignado",
             "Plagas Comunes / Observadas": plagas,
             "Control Fitosanitario (Dosis)": fitosanitario,
-            "Control Nutricional (Etapa)": nutritional if 'nutritional' in locals() else nutricional,
+            "Control Nutricional (Etapa)": nutritional,
             "Fertilizantes (Foliares/Granulados)": fertilizantes,
             "Estado del Cultivo": estado,
             "Responsable": responsable if responsable else "General"
         }])
         
+        # Combinamos los datos viejos con la nueva fila
         if df_bitacora.empty:
             df_actualizado = nuevo_registro
         else:
             df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True)
         
-        # Guardado procesado fila por fila para evitar restricciones de Google
+        # Guardamos la tabla completa actualizada en Google Sheets
         conn.update(data=df_actualizado)
-        st.success(f"¡Registro para el cultivo '{cultivo}' guardado con éxito!")
+        st.success(f"¡Registro para '{cultivo}' guardado con éxito!")
         st.rerun()
     else:
         st.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
 
-# Mostrar Datos
+# Mostrar los datos en el centro de la pantalla
 st.header("📊 Cuaderno de Campo Digitalizado (Nube)")
 if not df_bitacora.empty:
     st.dataframe(df_bitacora, use_container_width=True)
 else:
-    st.info("La base de datos está lista. Ingresa el primer registro desde la barra lateral.")
+    st.info("La base de datos está vacía o lista para recibir el primer registro desde la barra lateral.")
