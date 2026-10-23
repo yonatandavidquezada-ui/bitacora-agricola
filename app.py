@@ -49,7 +49,7 @@ if boton_guardar:
             "Lote / Parcela": lote if lote else "No asignado",
             "Plagas Comunes / Observadas": plagas,
             "Control Fitosanitario (Dosis)": fitosanitario,
-            "Control Nutricional (Etapa)": nutritional,
+            "Control Nutricional (Etapa)": nutricional,
             "Fertilizantes (Foliares/Granulados)": fertilizantes,
             "Estado del Cultivo": estado,
             "Responsable": responsable if responsable else "General"
