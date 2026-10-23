@@ -62,7 +62,7 @@ if boton_guardar:
             df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True)
         
         # Guardamos la tabla completa actualizada en Google Sheets
-        conn.update(data=df_actualizado)
+        conn.update(data=df_actualizado) ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
         st.success(f"¡Registro para '{cultivo}' guardado con éxito!")
         st.rerun()
     else:
