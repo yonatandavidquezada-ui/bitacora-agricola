@@ -1,7 +1,7 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
-import gspread
 
 # Configuración de la interfaz
 st.set_page_config(page_title="Bitácora Agrícola Fitosanitaria", page_icon="🧅", layout="wide")
@@ -9,18 +9,16 @@ st.set_page_config(page_title="Bitácora Agrícola Fitosanitaria", page_icon="�
 st.title("🚜 Cuaderno de Bitácora y Control Fitosanitario")
 st.write("Registra tus cultivos, monitorea plagas y lleva el control permanente en la nube.")
 
-# --- CONEXIÓN DIRECTA POR ENLACE PÚBLICO ---
+# Inicializar el conector oficial de Streamlit para Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# 1. Leer los datos actuales que se encuentran en el archivo remoto
 try:
-    url_hoja = st.secrets["connections"]["gsheets"]["spreadsheet"]
-    # Conexión anónima permitida para lectura/escritura pública
-    gc = gspread.public()
-    sh = gc.open_by_url(url_hoja)
-    worksheet = sh.get_worksheet(0)
-    
-    # Leer datos existentes para la tabla de la pantalla
-    records = worksheet.get_all_records()
-    df_bitacora = pd.DataFrame(records)
+    df_bitacora = conn.read()
+    if df_bitacora is not None:
+        df_bitacora = df_bitacora.dropna(how="all")
 except Exception:
+    # Estructura de respaldo si el documento estuviera en blanco
     df_bitacora = pd.DataFrame(columns=[
         "Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", 
         "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", 
@@ -28,7 +26,7 @@ except Exception:
         "Estado del Cultivo", "Responsable"
     ])
 
-# Formulario en la barra lateral
+# 2. Formulario en la barra lateral
 st.sidebar.header("📝 Añadir Nuevo Registro")
 with st.sidebar.form("formulario_campo"):
     fecha = st.date_input("Fecha de Registro/Inspección", datetime.date.today())
@@ -43,43 +41,38 @@ with st.sidebar.form("formulario_campo"):
     
     boton_guardar = st.form_submit_button("Guardar Permanentemente")
 
-# Envío de datos directo fila por fila (Evita el bloqueo de Google)
+# 3. Guardar registros directamente sobre el conector
 if boton_guardar:
     if cultivo and plagas:
-        nueva_fila = [
-            str(fecha), cultivo, lote if lote else "No asignado", plagas,
-            fitosanitario, nutritional if 'nutritional' in locals() else nutricional,
-            fertilizantes, estado, responsable if responsable else "General"
-        ]
+        # Dar formato exacto a la nueva fila alineada con el documento de Google
+        nuevo_registro = pd.DataFrame([{
+            "Fecha Registro": str(fecha),
+            "Nombre de Cultivo": cultivo,
+            "Lote / Parcela": lote if lote else "No asignado",
+            "Plagas Comunes / Observadas": plagas,
+            "Control Fitosanitario (Dosis)": fitosanitario,
+            "Control Nutricional (Etapa)": nutritional if 'nutritional' in locals() else nutritional,
+            "Fertilizantes (Foliares/Granulados)": fertilizantes,
+            "Estado del Cultivo": estado,
+            "Responsable": responsable if responsable else "General"
+        }])
         
-        try:
-            # Abrir cliente con permisos de edición para el envío de la fila
-            gc_edit = gspread.oauth() # Intenta usar credenciales por defecto de la sesión web
-            sh_edit = gc_edit.open_by_url(url_hoja)
-            sh_edit.get_worksheet(0).append_row(nueva_fila)
-            st.sidebar.success("¡Guardado directamente en Google Sheets!")
-        except Exception:
-            # Si el cliente directo falla, guardamos en la sesión local para asegurar disponibilidad en el campo
-            if 'respaldo_datos' not in st.session_state:
-                st.session_state.respaldo_datos = []
-            st.session_state.respaldo_datos.append(nueva_fila)
-            st.sidebar.success("¡Registro guardado exitosamente en la aplicación!")
+        # Unificar matrices de datos
+        if df_bitacora.empty:
+            df_actualizado = nuevo_registro
+        else:
+            df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True)
         
+        # Enviar actualización masiva directa por el canal de datos
+        conn.update(data=df_actualizado)
+        st.success(f"¡Registro para '{cultivo}' sincronizado de forma exitosa!")
         st.rerun()
     else:
-        st.sidebar.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
+        st.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
 
-# Mostrar los datos en pantalla
+# Mostrar los datos consolidados en el centro
 st.header("📊 Cuaderno de Campo Digitalizado (Nube)")
-
-# Combinar datos online con locales de la sesión
-if 'respaldo_datos' in st.session_state and len(st.session_state.respaldo_datos) > 0:
-    df_local = pd.DataFrame(st.session_state.respaldo_datos, columns=df_bitacora.columns if not df_bitacora.empty else ["Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", "Control Nutricional (Etapa)", "Fertilizantes (Foliares/Granulados)", "Estado del Cultivo", "Responsable"])
-    df_pantalla = pd.concat([df_bitacora, df_local], ignore_index=True) if not df_bitacora.empty else df_local
+if df_bitacora is not None and not df_bitacora.empty:
+    st.dataframe(df_bitacora, use_container_width=True)
 else:
-    df_pantalla = df_bitacora
-
-if not df_pantalla.empty:
-    st.dataframe(df_pantalla, use_container_width=True)
-else:
-    st.info("La base de datos está lista. Ingresa el primer registro desde la barra lateral.")
+    st.info("La base de datos remota está vacía. Ingresa tu primer registro desde la barra lateral para verificar la escritura.")
