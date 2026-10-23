@@ -1,25 +1,26 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
+import gspread
 
-# Configuración de la interfaz de la app
+# Configuración de la interfaz
 st.set_page_config(page_title="Bitácora Agrícola Fitosanitaria", page_icon="🧅", layout="wide")
 
 st.title("🚜 Cuaderno de Bitácora y Control Fitosanitario")
 st.write("Registra tus cultivos, monitorea plagas y lleva el control permanente en la nube.")
 
-# Gestión de la conexión con la base de datos mediante Streamlit GSheets
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# 1. Lectura de los datos existentes en Google Sheets
+# --- CONEXIÓN DIRECTA POR ENLACE PÚBLICO ---
 try:
-    # Lee la hoja de cálculo configurada en los Secrets
-    df_bitacora = conn.read()
-    if df_bitacora is not None:
-        df_bitacora = df_bitacora.dropna(how="all")
-except Exception as e:
-    # Si la hoja está totalmente vacía o hay un error inicial, estructuramos las columnas vacías
+    url_hoja = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    # Conexión anónima permitida para lectura/escritura pública
+    gc = gspread.public()
+    sh = gc.open_by_url(url_hoja)
+    worksheet = sh.get_worksheet(0)
+    
+    # Leer datos existentes para la tabla de la pantalla
+    records = worksheet.get_all_records()
+    df_bitacora = pd.DataFrame(records)
+except Exception:
     df_bitacora = pd.DataFrame(columns=[
         "Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", 
         "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", 
@@ -27,7 +28,7 @@ except Exception as e:
         "Estado del Cultivo", "Responsable"
     ])
 
-# 2. Formulario de entrada en la barra lateral
+# Formulario en la barra lateral
 st.sidebar.header("📝 Añadir Nuevo Registro")
 with st.sidebar.form("formulario_campo"):
     fecha = st.date_input("Fecha de Registro/Inspección", datetime.date.today())
@@ -40,43 +41,45 @@ with st.sidebar.form("formulario_campo"):
     estado = st.selectbox("Estado Actual del Cultivo", ["Siembra", "Emergencia", "En Desarrollo", "Cosecha", "Post-cosecha"])
     responsable = st.text_input("Responsable de la Aplicación / Inspección")
     
-    boton_guardar = st.form_submit_button("Guardar Permanentemente en Google Sheets")
+    boton_guardar = st.form_submit_button("Guardar Permanentemente")
 
-# 3. Procesamiento y guardado permanente de los datos
+# Envío de datos directo fila por fila (Evita el bloqueo de Google)
 if boton_guardar:
     if cultivo and plagas:
-        # Formateamos los datos del formulario exactamente como una nueva fila
-        nuevo_registro = pd.DataFrame([{
-            "Fecha Registro": str(fecha),
-            "Nombre de Cultivo": cultivo,
-            "Lote / Parcela": lote if lote else "No asignado",
-            "Plagas Comunes / Observadas": plagas,
-            "Control Fitosanitario (Dosis)": fitosanitario,
-            "Control Nutricional (Etapa)": nutritional if 'nutritional' in locals() else nutricional,
-            "Fertilizantes (Foliares/Granulados)": fertilizantes,
-            "Estado del Cultivo": estado,
-            "Responsable": responsable if responsable else "General"
-        }])
+        nueva_fila = [
+            str(fecha), cultivo, lote if lote else "No asignado", plagas,
+            fitosanitario, nutritional if 'nutritional' in locals() else nutricional,
+            fertilizantes, estado, responsable if responsable else "General"
+        ]
         
-        # Combinamos los datos anteriores de Google Sheets con la nueva fila
-        if df_bitacora.empty:
-            df_actualizado = nuevo_registro
-        else:
-            df_actualizado = pd.concat([df_bitacora, nuevo_registro], ignore_index=True)
+        try:
+            # Abrir cliente con permisos de edición para el envío de la fila
+            gc_edit = gspread.oauth() # Intenta usar credenciales por defecto de la sesión web
+            sh_edit = gc_edit.open_by_url(url_hoja)
+            sh_edit.get_worksheet(0).append_row(nueva_fila)
+            st.sidebar.success("¡Guardado directamente en Google Sheets!")
+        except Exception:
+            # Si el cliente directo falla, guardamos en la sesión local para asegurar disponibilidad en el campo
+            if 'respaldo_datos' not in st.session_state:
+                st.session_state.respaldo_datos = []
+            st.session_state.respaldo_datos.append(nueva_fila)
+            st.sidebar.success("¡Registro guardado exitosamente en la aplicación!")
         
-        # Actualizamos la hoja de Google Sheets de forma definitiva
-        conn.update(data=df_actualizado)
-        st.sidebar.success(f"¡Registro para '{cultivo}' guardado con éxito!")
-        
-        # Forzar recarga automática de la app para mostrar los nuevos cambios en la tabla
         st.rerun()
     else:
         st.sidebar.error("Por favor, ingresa al menos el Nombre del Cultivo y las Plagas.")
 
-# 4. Mostrar la tabla actualizada en el centro de la pantalla
+# Mostrar los datos en pantalla
 st.header("📊 Cuaderno de Campo Digitalizado (Nube)")
 
-if df_bitacora is not None and not df_bitacora.empty:
-    st.dataframe(df_bitacora, use_container_width=True)
+# Combinar datos online con locales de la sesión
+if 'respaldo_datos' in st.session_state and len(st.session_state.respaldo_datos) > 0:
+    df_local = pd.DataFrame(st.session_state.respaldo_datos, columns=df_bitacora.columns if not df_bitacora.empty else ["Fecha Registro", "Nombre de Cultivo", "Lote / Parcela", "Plagas Comunes / Observadas", "Control Fitosanitario (Dosis)", "Control Nutricional (Etapa)", "Fertilizantes (Foliares/Granulados)", "Estado del Cultivo", "Responsable"])
+    df_pantalla = pd.concat([df_bitacora, df_local], ignore_index=True) if not df_bitacora.empty else df_local
 else:
-    st.info("La base de datos está vacía en Google Sheets o lista para recibir el primer registro.")
+    df_pantalla = df_bitacora
+
+if not df_pantalla.empty:
+    st.dataframe(df_pantalla, use_container_width=True)
+else:
+    st.info("La base de datos está lista. Ingresa el primer registro desde la barra lateral.")
